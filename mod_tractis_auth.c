@@ -11,45 +11,46 @@ module AP_MODULE_DECLARE_DATA mod_tractis_auth;
 
 //Recovers the username from the config
 static char* get_username(request_rec* r){
-	struct tractis_auth_module_config *s_cfg = ap_get_module_config(r->server->module_config, &mod_tractis_auth);
+	struct tractis_auth_module_config *s_cfg = ap_get_module_config(r->per_dir_config, &mod_tractis_auth);
 	return s_cfg->username;
 }
 
 //Recovers the password from the config
 static char* get_password(request_rec* r){
-	struct tractis_auth_module_config *s_cfg = ap_get_module_config(r->server->module_config, &mod_tractis_auth);
+	struct tractis_auth_module_config *s_cfg = ap_get_module_config(r->per_dir_config, &mod_tractis_auth);
 	return s_cfg->pass;
 }
 
 //Recovers the api_key identifier from the config
 static char* get_api_key(request_rec* r){
-	struct tractis_auth_module_config *s_cfg = ap_get_module_config(r->server->module_config, &mod_tractis_auth);
+	struct tractis_auth_module_config *s_cfg = ap_get_module_config(r->per_dir_config, &mod_tractis_auth);
 	return s_cfg->api_key;
 }
 
 //Recovers if the module is enabled or not
 static char* is_enabled(request_rec* r){
-	struct tractis_auth_module_config *s_cfg = ap_get_module_config(r->server->module_config, &mod_tractis_auth);
+	struct tractis_auth_module_config *s_cfg = ap_get_module_config(r->per_dir_config, &mod_tractis_auth);
 	return s_cfg->enabled;
 }
 
 
 static int process_request(request_rec* r){
+	
+        char message[MESSAGE_LEN];
+	sprintf(message, "Starting Tractis auth module process for url %s\n", r->uri);
+	log_debug(message);
 
-	//Used on memory profiling tests
-   	#ifdef PROFILE 
-		mtrace();
-	#endif
-
-	log_debug("Starting Tractis auth module process");
-
-    char *enabled = is_enabled(r);
+        char *enabled = is_enabled(r);
 	//Not enabled
 	if (enabled == NULL || strcmp(enabled,"true") !=0){
 		char buff[MESSAGE_LEN];
 		sprintf(buff,"Module not enabled for given url");
 		log_debug(buff);
 		return DECLINED;
+	}else{
+		char buff[MESSAGE_LEN];
+		sprintf(buff,"Module enabled for given url");
+		log_debug(buff);
 	}
 
 	//Recover credentials
@@ -80,11 +81,7 @@ static int process_request(request_rec* r){
 	}
 
 	int certificate_status = validate_certificate(r,certificate, user, password, api_key);
-
-	#ifdef PROFILE 
-		mtrace();
-	#endif	
-
+		
 	if (certificate_status == VALID) return OK;
 	else {
 		if(is_info_enabled()){
@@ -111,35 +108,48 @@ static void register_hooks(apr_pool_t* pool)
 	log_debug("Tractis authentication module started!");
 }
 
-//Creates the service config struct, not performs filling but could be used to provide default parameters
-static void *create_mod_config(apr_pool_t *p, server_rec *s)
-{  
+static void* create_conf(apr_pool_t* pool) {
   struct tractis_auth_module_config *newcfg;
-  newcfg = (struct tractis_auth_module_config *) apr_pcalloc(p, sizeof(struct tractis_auth_module_config));
+  newcfg = (struct tractis_auth_module_config *) apr_pcalloc(pool, sizeof(struct tractis_auth_module_config));
   return (void *) newcfg;
 }
 
+//Creates the service config struct, not performs filling but could be used to provide default parameters
+static void *create_mod_config(apr_pool_t *pool, server_rec *s)
+{  
+  return create_conf(pool);	
+}
+
+static void* my_create_dir_conf(apr_pool_t* pool, char* x) {
+  return create_conf(pool);
+}
+
+
 static const char *set_tractis_username(cmd_parms *parms, void *mconfig, const char *arg)
-{	struct tractis_auth_module_config *s_cfg = ap_get_module_config(parms->server->module_config, &mod_tractis_auth);
-	s_cfg->username = (char *) arg;	
+{	
+        struct tractis_auth_module_config *s_cfg = (struct tractis_auth_module_config *)mconfig;
+        s_cfg->username = (char *)arg;
 	return NULL;
 }
 
 static const char *set_tractis_password(cmd_parms *parms, void *mconfig, const char *arg)
-{	struct tractis_auth_module_config *s_cfg = ap_get_module_config(parms->server->module_config, &mod_tractis_auth);
-	s_cfg->pass = (char *) arg;	
+{	
+	struct tractis_auth_module_config *s_cfg = (struct tractis_auth_module_config *)mconfig;
+        s_cfg->pass = (char *)arg;
 	return NULL;
 }
 
 static const char *set_tractis_api_key(cmd_parms *parms, void *mconfig, const char *arg)
-{	struct tractis_auth_module_config *s_cfg = ap_get_module_config(parms->server->module_config, &mod_tractis_auth);
-	s_cfg->api_key = (char *) arg;	
+{
+	struct tractis_auth_module_config *s_cfg = (struct tractis_auth_module_config *)mconfig;
+        s_cfg->api_key = (char *)arg;
 	return NULL;
 }
 
 static const char *set_enabled(cmd_parms *parms, void *mconfig, const char *arg)
-{	struct tractis_auth_module_config *s_cfg = ap_get_module_config(parms->server->module_config, &mod_tractis_auth);
-	s_cfg->enabled = (char *) arg;	
+{	
+	struct tractis_auth_module_config *s_cfg = (struct tractis_auth_module_config *)mconfig;
+        s_cfg->enabled = (char *)arg;
 	return NULL;
 }
 
@@ -154,12 +164,36 @@ AP_INIT_TAKE1("TractisEnabled", set_enabled, NULL, ACCESS_CONF,"Defines if the m
 };
 
 
+static void* merge(apr_pool_t* pool, void* BASE, void* ADD) {
+    struct tractis_auth_module_config *base = BASE ;
+    struct tractis_auth_module_config *add = ADD ;
+    struct tractis_auth_module_config *conf = apr_palloc(pool, sizeof(struct tractis_auth_module_config)) ;
+
+    conf->username = ( add->username == NULL ) ? base->username : add->username ;
+    conf->pass = ( add->pass == NULL ) ? base->pass : add->pass ;
+    conf->api_key = ( add->api_key == NULL ) ? base->api_key : add->api_key ;
+
+
+    conf->enabled = ( add->enabled == NULL ) ? base->enabled : add->enabled ;
+    return conf ;
+}
+
+static void* my_merge_dir_conf(apr_pool_t* pool, void* BASE, void* ADD) {
+    log_debug("Merging directory config");
+     return merge(pool, BASE, ADD);
+}
+
+static void* my_merge_server_conf(apr_pool_t* pool, void* BASE, void* ADD) {
+    log_debug("Merging server config");
+    return merge(pool, BASE, ADD);
+}
+
 module AP_MODULE_DECLARE_DATA mod_tractis_auth = {
 	STANDARD20_MODULE_STUFF,
-	NULL,
-	NULL,
+	my_create_dir_conf,
+	my_merge_dir_conf,
 	create_mod_config, //Config
-	NULL,
+	my_merge_server_conf,
 	mod_commands, //Commands
 	register_hooks
 };
